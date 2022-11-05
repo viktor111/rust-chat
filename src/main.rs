@@ -11,6 +11,11 @@ use std::error::Error;
 use tokio_util::codec::{Framed, LinesCodec};
 use futures::sink::SinkExt;
 
+//todos:
+// 1. refactor process method
+// 2. add password functionality
+// 3. add help command
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>>{
 
@@ -111,11 +116,9 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
 
                     state.broadcast(addr, &msg).await;
                 }
-                // An error occurred.
                 Some(Err(e)) => {
                     println!("failed to read from socket; err = {:?}", e);
                 }
-                // The stream has been exhausted.
                 None => break,
             },
         }
