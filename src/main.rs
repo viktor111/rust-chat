@@ -46,6 +46,7 @@ type Rx = mpsc::UnboundedReceiver<String>;
 
 struct Shared {
     peers: HashMap<SocketAddr, Tx>,
+    usernames: HashMap<SocketAddr, String>,
 }
 
 struct Peer {
@@ -57,11 +58,37 @@ impl Shared{
     fn new() -> Self{
         Self{
             peers: HashMap::new(),
+            usernames: HashMap::new(),
+        }
+    }
+
+    async fn add_username(&mut self, username: String, addr: SocketAddr){
+        self.usernames.insert(addr, username);
+    }
+
+    async fn remove_username(&mut self, addr: SocketAddr){
+        self.usernames.remove(&addr);
+    }
+
+    async fn check_username(&mut self, username_to_check: &str) -> bool{
+        for (addr, username) in &self.usernames{
+            if username == username_to_check{
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    async fn print_usernames(&mut self){
+        for (addr, username) in &self.usernames{
+            println!("{}: {}", addr, username);
         }
     }
 
     async fn broadcast(&mut self, sender: SocketAddr, message: &str){
         for peer in self.peers.iter_mut() {
+            println!("Sending message to {}", peer.0);
             if *peer.0 != sender {
                 let _ = peer.1.send(message.into());
             }
@@ -87,20 +114,40 @@ impl Peer{
 async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr) -> Result<(), Box<dyn Error>>{
     let mut lines = Framed::new(stream, LinesCodec::new());
 
-    lines.send("Enter username:").await?;
+    loop {
+        lines.send("Enter username:").await?; 
 
-    let username = match lines.next().await {
-        Some(Ok(line)) => line,
-        _ => {
-            return Ok(());
+        let username_input = match lines.next().await {
+            Some(Ok(line)) => {
+                line
+            },
+            _  => {
+                return Ok(());
+            }
+        }; 
+
+        let is_username_taken = state.lock().await.check_username(&username_input).await;
+        println!("Is username taken: {}", is_username_taken);
+
+        if is_username_taken {
+            lines.send("Username is taken try again").await?;
+            println!("[-] Username is taken try again");
         }
-    };
+        else{
+            state.lock().await.add_username(username_input, addr).await;
+            println!("[+] Username added");
+            state.lock().await.print_usernames().await;
+            break;
+        }
+
+        lines.send("Enter new username:").await?;
+    }
 
     let mut peer = Peer::new(state.clone(), lines).await?;
 
     {
         let mut state = state.lock().await;
-        let msg = format!("{} has joined the chat", username);
+        let msg = format!("{} has joined the chat", state.usernames.get(&addr).unwrap());
         state.broadcast(addr, &msg).await;
     }
 
@@ -112,6 +159,7 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
             result = peer.lines.next() => match result {
                 Some(Ok(msg)) => {
                     let mut state = state.lock().await;
+                    let username = state.usernames.get(&addr).unwrap();
                     let msg = format!("{}: {}", username, msg);
 
                     state.broadcast(addr, &msg).await;
@@ -127,7 +175,7 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
     {
         let mut state = state.lock().await;
         state.peers.remove(&addr);
-
+        let username = state.usernames.get(&addr).unwrap();
         let msg = format!("{} has left the chat", username);
         println!("{}", msg);
         state.broadcast(addr, &msg).await;
