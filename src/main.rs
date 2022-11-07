@@ -94,6 +94,13 @@ impl Shared{
             }
         }
     }
+
+    async fn send_to_original(&mut self, sender: SocketAddr, message: &str){
+        let peer = self.peers.get(&sender);
+        if let Some(peer) = peer{
+            let _ = peer.send(message.into());
+        }
+    }
 }
 
 impl Peer{
@@ -160,9 +167,18 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
                 Some(Ok(msg)) => {
                     let mut state = state.lock().await;
                     let username = state.usernames.get(&addr).unwrap();
-                    let msg = format!("{}: {}", username, msg);
-
-                    state.broadcast(addr, &msg).await;
+                    if msg.contains("/") {
+                        if msg == "/help" {
+                            let peer = state.peers.get(&addr);
+                            if let Some(peer) = peer{
+                                let _ = peer.send("Available commands: /help, /list, /quit".into());
+                            } 
+                        }
+                    }
+                    else{
+                        let msg = format!("{}: {}", username, msg);
+                        state.broadcast(addr, &msg).await;
+                    }
                 }
                 Some(Err(e)) => {
                     println!("failed to read from socket; err = {:?}", e);
@@ -177,6 +193,8 @@ async fn process(state: Arc<Mutex<Shared>>, stream: TcpStream, addr: SocketAddr)
         state.peers.remove(&addr);
         let username = state.usernames.get(&addr).unwrap();
         let msg = format!("{} has left the chat", username);
+        state.remove_username(addr).await;
+        println!("[-] Username removed");
         println!("{}", msg);
         state.broadcast(addr, &msg).await;
     }
